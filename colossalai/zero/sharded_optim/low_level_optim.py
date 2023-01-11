@@ -229,7 +229,7 @@ class LowLevelZeroOptimizer(ColossalaiOptimizer):
             numel_per_rank[rank_to_go] += param.numel()
 
         if self._verbose:
-            self._logger.info(f'Number of elements on ranks: {numel_per_rank}',
+            self._logger.info(f'Number of elements on ranks: {numel_per_rank}, rank:{gpc.get_global_rank()}',
                               ranks=[0],
                               parallel_mode=self._dp_parallel_mode)
         return params_per_rank

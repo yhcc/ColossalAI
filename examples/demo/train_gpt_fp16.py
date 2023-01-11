@@ -1,8 +1,8 @@
 
 # torchrun --standalone --nproc_per_node 8 --nnodes 1 train_gpt_fp16.py --from_torch --config configs/demo_config.py 
 # srun -p llm -n8 --ntasks-per-node 8 --gres=gpu:8 --job-name hello --kill-on-bad-exit=1 python train_gpt_fp16.py  --config configs/demo_config.py
-
-# os.environ["PYTORCH_CUDA_ALLOC_CONF"] = 'max_split_size_mb:512'
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = 'max_split_size_mb:512'
 import colossalai
 import colossalai.utils as utils
 import torch
@@ -10,17 +10,9 @@ import torch.nn as nn
 from colossalai.context.parallel_mode import ParallelMode
 from colossalai.core import global_context as gpc
 from colossalai import nn as col_nn
-from colossalai.engine.schedule import (InterleavedPipelineSchedule, PipelineSchedule)
 from colossalai.logging import disable_existing_loggers, get_dist_logger
 from colossalai.nn import LinearWarmupLR
-from colossalai.trainer import Trainer, hooks
-from colossalai.utils import is_using_pp, colo_set_process_memory_fraction
-from colossalai.utils.timer import MultiTimer
-from colossalai.zero.init_ctx import ZeroInitContext
-from colossalai.pipeline.pipelinable import PipelinableContext
-from colossalai.utils.model.colo_init_context import ColoInitContext
 from model.pipeline_gpt1d import GPT2_exlarge_pipeline_1D
-from colossalai.nn.optimizer.fused_adam import FusedAdam
 import psutil
 from tqdm import tqdm
 from colossalai import nn as col_nn
@@ -276,10 +268,10 @@ def main():
                 return_loss=True,
                 return_output_label=False,
             )
-            if enable:
-                for name, param in model.named_parameters():
-                    pbar.write(f'{step}, {name}, {type(param.grad)}')
-                    break
+            # if enable:
+            #     for name, param in model.named_parameters():
+            #         pbar.write(f'{step}, {name}, {type(param.grad)}')
+            #         break
             success_update, grad_norm = engine.step()
             if success_update:  # 只有update成功才更新，之后这里顺便需要修改一下记录对应的sample数量，这个才是有效的sample数量
                 lr_scheduler.step()

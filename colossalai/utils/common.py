@@ -338,7 +338,7 @@ def clip_grad_norm_fp32(parameters, max_norm, norm_type=2):
     # Calculate norm.
     if norm_type == inf:
         total_norm = max(p.grad.data.abs().max() for p in params)
-        total_norm_cuda = torch.cuda.FloatTensor([float(total_norm)])
+        total_norm_cuda = torch.FloatTensor([float(total_norm)]).to(params[0].grad.device)
         # Take max across all model-parallel GPUs.
         if gpc.is_initialized(ParallelMode.MODEL) and gpc.get_world_size(ParallelMode.MODEL) > 1:
             dist.all_reduce(total_norm_cuda,

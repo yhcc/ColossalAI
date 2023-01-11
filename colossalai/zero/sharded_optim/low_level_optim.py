@@ -12,9 +12,15 @@ from colossalai.logging import get_dist_logger
 from colossalai.nn.optimizer import ColossalaiOptimizer
 from colossalai.utils.cuda import get_current_device
 
+from colossalai.utils import is_using_pp
+
+from torch._six import inf
+from colossalai.utils.common import _calc_l2_norm, _calc_lp, _get_tensor_norm, _move_norm_to_cuda
+from colossalai.constants import IS_TENSOR_PARALLEL, NUM_PARTITIONS
+from colossalai.tensor import ColoTensor
+from colossalai.tensor.distspec import DistPlacementPattern
+
 from ._utils import (
-    calculate_global_norm_from_list,
-    compute_norm,
     flatten,
     get_grad_accumulate_object,
     has_inf_or_nan,
@@ -63,12 +69,12 @@ class LowLevelZeroOptimizer(ColossalaiOptimizer):
     # forced dtype
             forced_dtype=None):
 
-        # TODO: add support for
-        # 1. fp16 master weights
-        # 2. contiguous gradients
-        # 3. cpu offload
-        # 4. support when some parameters requires_grad = False
         super(LowLevelZeroOptimizer, self).__init__(optim=optimizer)
+        if is_using_pp() and overlap_communication:
+            raise RuntimeError("The pipeline parallelism is not compatible with overlap_communication, please set overlap_communication=False if you want to use the pipeline parallelism.")
+        if is_using_pp() and partition_grad:
+            raise RuntimeError("The pipeline parallelism is not compatible with Zero2, please set partition_grad=False if you want to use the pipeline parallelism.")
+
         self._dtype = self.optim.param_groups[0]['params'][0].dtype
         self._logger = get_dist_logger()
         self._verbose = verbose
@@ -389,6 +395,10 @@ class LowLevelZeroOptimizer(ColossalaiOptimizer):
         loss.backward(retain_graph=retain_graph)
 
         # finish gradient reduction
+        if not is_using_pp():
+            self._reduce_grad()
+    
+    def _reduce_grad(self):
         if not self._partition_grads:
             self._reduce_grad_stage1()
         else:
@@ -422,33 +432,43 @@ class LowLevelZeroOptimizer(ColossalaiOptimizer):
     ####################
 
     def step(self, closure=None):
+        if is_using_pp():
+            self._reduce_grad()
+            self.sync_grad()
+        return self._step(closure=closure)
+
+
+    def _step(self, closure=None):
         assert closure is None, 'closure is not supported by step()'
 
         # check for overflow
         found_inf = self._check_overflow()
+        loss_scale = self.loss_scale.item()  # backup, later it will be used for computing
         self.grad_scaler.update(found_inf)
 
         # update loss scale if overflow occurs
         if found_inf:
             self._grad_store._averaged_gradients = dict()
             self.zero_grad()
-            return
+            return False, None
 
         # copy the grad of fp16 param to fp32 param
         single_grad_partition_groups = []
         norm_groups = []
+        global_norm = None
 
         for group_id in range(self.num_param_groups):
             # compute norm
-            norm_group = compute_norm(gradients=self._grad_store._averaged_gradients[group_id],
-                                      params=self._param_store.get_fp16_params_by_rank_group(group_id=group_id,
-                                                                                             rank=self._local_rank),
-                                      dp_group=self._dp_group,
-                                      mp_group=self._mp_group)
-            norm_groups.append(norm_group)
+            gradients = self._grad_store.get_averaged_gradients_by_group(group_id)
+            if self._clip_grad_norm > 0:
+                # this norm is before scaling, will be very large
+                norm_group = compute_norm(gradients=gradients,
+                                        parameters=self._param_store.get_fp16_params_by_rank_group(group_id=group_id,
+                                                                                                rank=self._local_rank))  # before scale norm
+                norm_groups.append(norm_group)
 
             # create flat gradient for the flat fp32 params
-            fp16_avg_grads = self._grad_store.get_averaged_gradients_by_group(group_id)
+            fp16_avg_grads = gradients
             flat_fp16_avg_grads = flatten(fp16_avg_grads)
 
             dtype = self._fp32_flat_param_groups_of_current_rank[group_id].dtype
@@ -465,9 +485,10 @@ class LowLevelZeroOptimizer(ColossalaiOptimizer):
             self._grad_store._averaged_gradients[group_id] = []
 
         # unscale and clip grads
-        global_norm = calculate_global_norm_from_list(norm_list=norm_groups)
-        self._unscale_and_clip_grads(single_grad_partition_groups, global_norm)
-
+        # get the global norm
+        if self._clip_grad_norm>0:
+            global_norm = sum(norm_groups)**0.5
+        self._unscale_and_clip_grads(single_grad_partition_groups, global_norm, loss_scale)
         # update the parameters
         self.optim.step()
         # release the fp32 grad
@@ -484,11 +505,14 @@ class LowLevelZeroOptimizer(ColossalaiOptimizer):
         for group_id in range(self.num_param_groups):
             for rank in range(self._world_size):
                 fp16_param = self._param_store.get_flat_fp16_param_by_rank_group(rank=rank, group_id=group_id)
+                rank = gpc.get_ranks_in_group(ParallelMode.DATA)[rank]  # need to convert to the global rank
                 handle = dist.broadcast(fp16_param, src=rank, group=self._dp_group, async_op=True)
                 handles.append(handle)
 
         for handle in handles:
             handle.wait()
+
+        return True, global_norm/loss_scale
 
     ##################
     # FP16 Utilities #
@@ -517,15 +541,15 @@ class LowLevelZeroOptimizer(ColossalaiOptimizer):
         else:
             return False
 
-    def _unscale_and_clip_grads(self, grad_groups_flat, total_norm):
+    def _unscale_and_clip_grads(self, grad_groups_flat, total_norm, loss_scale):
         # compute combined scale factor for this group
-        combined_scale = self.loss_scale
+        combined_scale = loss_scale
 
         if self._clip_grad_norm > 0.:
             # norm is in fact norm*scale
-            clip = ((total_norm / self.loss_scale) + 1e-6) / self._clip_grad_norm
-            if clip > 1:
-                combined_scale = clip * self.loss_scale
+            clip = ((total_norm / loss_scale) + 1e-6) / self._clip_grad_norm
+            if clip > 1.:
+                combined_scale = clip * loss_scale
 
         for grad in grad_groups_flat:
             grad.data.mul_(1. / combined_scale)
@@ -582,3 +606,119 @@ class LowLevelZeroOptimizer(ColossalaiOptimizer):
         # left in the communication bucket
         for reduce_rank in range(self._world_size):
             self._reduce_grads_in_bucket(reduce_rank)
+
+    def clip_grad_norm(self, model, max_norm):
+        # will conduct in the step()
+        pass
+
+    # TODO 需要加入state_dict方法
+    def state_dict(self):
+        raise RuntimeError()
+
+    def load_state_dict(self, states):
+        raise RuntimeError()
+
+def is_model_parallel_parameter(p):
+    # colossalai.utils.common.is_model_parallel_parameter cannot process the ColoParam 
+    return (hasattr(p, IS_TENSOR_PARALLEL) and getattr(p, IS_TENSOR_PARALLEL)) or \
+        (isinstance(p, ColoTensor) and p.dist_spec.placement == DistPlacementPattern.SHARD)
+
+
+def compute_norm(gradients, parameters, norm_type=2):
+    """Get the norm 
+    Arguments:
+        gradients (Iterable[Tensor]): The gradient value
+        parameters (Iterable[Tensor]): The parameter each gradient corresponds to 
+        norm_type (float or int): type of the used p-norm. Can be ``'inf'`` for
+            infinity norm.
+        
+    Returns:
+        Total norm of the parameters, need total_norm**(1/norm) before using.
+    """
+
+    enable_cuda_kernels = gradients[0].device.type == 'cuda'
+    # Norm parameters.
+    norm_type = float(norm_type)
+
+    has_zero_shared_param: bool = False
+    for param in parameters:
+        if hasattr(param, 'colo_attr') and param.colo_attr.sharded_data_tensor.is_sharded:
+            raise RuntimeError("Currently not support Zero3")
+
+    # Parameters can be on CPU or CUDA
+    # If parameters are on CPU, disable CUDA kernerls
+
+    # Calculate norm.
+    if norm_type == inf:
+        total_norm = max(g.data.abs().max() for g in gradients)
+        total_norm_cuda = torch.FloatTensor([float(total_norm)]).to(gradients[0].device)
+        # Take max across all model-parallel GPUs.
+        if gpc.is_initialized(ParallelMode.MODEL) and gpc.get_world_size(ParallelMode.MODEL) > 1:
+            dist.all_reduce(total_norm_cuda,
+                            op=dist.ReduceOp.MAX,
+                            group=gpc.get_group(ParallelMode.MODEL),
+                            async_op=False)
+        if has_zero_shared_param:
+            dist.all_reduce(total_norm_cuda, 
+                                op=dist.ReduceOp.MAX,
+                                group=gpc.get_group(ParallelMode.DATA),
+                                async_op=False)
+        total_norm = total_norm_cuda[0].item()
+    else:
+        tensor_parallel_grads = []
+        for g, p in zip(gradients, parameters):
+            # TODO consider the pipeline shared parameter
+
+            if gpc.is_initialized(ParallelMode.PIPELINE) and hasattr(p, 'pipeline_shared_module_pg') and dist.get_rank(p.pipeline_shared_module_pg)==0:  # if shared between different pipe, only count o
+                tensor_parallel_grads.append(g.data.float())
+                # if is_model_parallel_parameter(p):
+                #     tensor_parallel_grads.append(g.data.float())
+                # else:
+                #     no_tensor_parallel_grads.append(g.data.float())
+            elif gpc.is_initialized(ParallelMode.PIPELINE) and hasattr(p, 'pipeline_shared_module_pg') and dist.get_rank(p.pipeline_shared_module_pg)!=0:
+                continue
+            elif gpc.is_initialized(ParallelMode.TENSOR) and not is_model_parallel_parameter(p) and gpc.get_local_rank(ParallelMode.TENSOR)==0:  # if not used in each chunk, such as layernorm
+                # no_tensor_parallel_grads.append(g.data.float())
+                tensor_parallel_grads.append(g.data.float())
+            elif is_model_parallel_parameter(p):
+                # reductor = (gpc.get_world_size(ParallelMode.TENSOR) / getattr(p, NUM_PARTITIONS))**(1 / norm_type)
+                tensor_parallel_grads.append(g.data.float())
+            elif gpc.get_local_rank(ParallelMode.TENSOR)!=0:
+                continue
+            else:
+                raise RuntimeError("Should not arrive here")
+
+        if norm_type == 2.0 and enable_cuda_kernels:
+            tensor_parallel_norm = _calc_l2_norm(tensor_parallel_grads)**norm_type
+            # no_tensor_parallel_norm = _calc_l2_norm(no_tensor_parallel_grads)**norm_type
+        else:
+            tensor_parallel_norm = _calc_lp(tensor_parallel_grads, norm_type)
+            # no_tensor_parallel_norm = _calc_lp(no_tensor_parallel_grads, norm_type)
+        
+        # If norm is type of float, then we convert them into torch.Tensor.
+        tensor_parallel_norm = _get_tensor_norm(tensor_parallel_norm, enable_cuda_kernels)
+        # no_tensor_parallel_norm = _get_tensor_norm(no_tensor_parallel_norm, enable_cuda_kernels)
+        # If grads are on CPU, the norms is also on CPU. Cast them to CUDA tensors
+        if not enable_cuda_kernels:
+            tensor_parallel_norm = _move_norm_to_cuda(tensor_parallel_norm)
+            # no_tensor_parallel_norm = _move_norm_to_cuda(no_tensor_parallel_norm)
+
+        # total_norm = tensor_parallel_norm + no_tensor_parallel_norm
+        total_norm = tensor_parallel_norm
+
+        # Sum across all model-parallel GPUs.
+        if gpc.is_initialized(ParallelMode.MODEL):
+            dist.all_reduce(total_norm, op=dist.ReduceOp.SUM, group=gpc.get_group(ParallelMode.MODEL))
+
+        # This is because we use zero1, so we need to use this reduction.
+        dist.all_reduce(total_norm, op=dist.ReduceOp.SUM, group=gpc.get_group(ParallelMode.DATA))
+
+        if torch.is_tensor(total_norm):
+            total_norm = total_norm.item()
+
+    # Scale.
+    if total_norm == float('inf') or total_norm == -float('inf') or total_norm != total_norm:
+        total_norm = -1
+
+    return total_norm
+

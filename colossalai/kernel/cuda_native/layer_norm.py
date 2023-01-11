@@ -8,6 +8,11 @@ import torch
 from torch.cuda.amp import custom_bwd, custom_fwd
 from torch.nn import init
 from torch.nn.parameter import Parameter
+try:
+    from colossalai._C import layer_norm
+except ImportError:
+    from colossalai.kernel.op_builder.layernorm import LayerNormBuilder
+    layer_norm = LayerNormBuilder().load(verbose=False)
 
 
 class FusedLayerNormAffineFunction(torch.autograd.Function):
@@ -15,12 +20,6 @@ class FusedLayerNormAffineFunction(torch.autograd.Function):
     @staticmethod
     @custom_fwd(cast_inputs=torch.float32)
     def forward(ctx, input, weight, bias, normalized_shape, eps):
-        try:
-            from colossalai._C import layer_norm
-        except ImportError:
-            from colossalai.kernel.op_builder.layernorm import LayerNormBuilder
-            layer_norm = LayerNormBuilder().load()
-
         ctx.normalized_shape = normalized_shape
         ctx.eps = eps
         input_ = input.contiguous()
@@ -34,12 +33,6 @@ class FusedLayerNormAffineFunction(torch.autograd.Function):
     @staticmethod
     @custom_bwd
     def backward(ctx, grad_output):
-        try:
-            from colossalai._C import layer_norm
-        except ImportError:
-            from colossalai.kernel.op_builder.layernorm import LayerNormBuilder
-            layer_norm = LayerNormBuilder().load()
-
         input_, weight_, bias_, mean, invvar = ctx.saved_tensors
         grad_input = grad_weight = grad_bias = None
         grad_input, grad_weight, grad_bias \

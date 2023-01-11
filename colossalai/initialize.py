@@ -301,8 +301,8 @@ def initialize(model: nn.Module,
             model = model().to(get_current_device())
 
         # optimizer maybe a optimizer_cls
-        logger.warning("Initializing an non ZeRO model with optimizer class")
         if isinstance(optimizer, Callable):
+            logger.warning("Initializing an non ZeRO model with optimizer class")
             optimizer = optimizer(model.parameters())
 
     if not use_zero:
@@ -418,7 +418,7 @@ def initialize(model: nn.Module,
     # initialize schedule for engine
     if is_using_pp():
         tensor_shape = get_tensor_shape()
-        use_interleaved = hasattr(gpc.config, 'model') and hasattr(gpc.config.model, 'num_chunks')
+        use_interleaved = hasattr(gpc.config, 'model') and hasattr(gpc.config.model, 'num_chunks') and gpc.config.model.num_chunks>1
         if gpc.is_initialized(ParallelMode.PARALLEL_1D):
             scatter_gather = True
         else:

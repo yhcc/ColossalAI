@@ -140,7 +140,7 @@ def get_dataloader(dataset,
     _kwargs = kwargs.copy()
 
     if add_sampler and gpc.is_initialized(ParallelMode.DATA) and gpc.get_world_size(ParallelMode.DATA) > 1:
-        sampler = DataParallelSampler(dataset, shuffle=shuffle)
+        sampler = DataParallelSampler(dataset, shuffle=shuffle, drop_last=drop_last)
     else:
         sampler = None
 

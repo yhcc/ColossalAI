@@ -19,7 +19,7 @@ __all__ = ["save_checkpoint", "load_checkpoint"]
 def broadcast_state_dict(state_dict, parallel_mode):
     state_dict = [state_dict.copy() if isinstance(state_dict, dict) else state_dict]
     src_rank = gpc.get_ranks_in_group(parallel_mode)[0]
-    dist.broadcast_object_list(state_dict, src=src_rank, group=gpc.get_cpu_group(parallel_mode))
+    dist.broadcast_object_list(state_dict, src=src_rank, group=gpc.get_group(parallel_mode))
     return state_dict[0]
 
 
@@ -29,7 +29,7 @@ def partition_tensor_parallel_state_dict(state_dict: OrderedDict,
                                          partition_states: dict = dict()):
     src_rank = gpc.get_ranks_in_group(parallel_mode)[0]
     depth = gpc.get_world_size(parallel_mode)
-    group = gpc.get_cpu_group(parallel_mode)
+    group = gpc.get_group(parallel_mode)
     is_rank0 = gpc.get_local_rank(parallel_mode) == 0
     partition_info = [None]
     if is_rank0:
@@ -86,7 +86,7 @@ def gather_tensor_parallel_state_dict(
                 shape[0] *= depth
                 param = torch.empty(shape, dtype=param.dtype, device=param.device)
                 gather_list = list(torch.chunk(param, depth, dim=0))
-            dist.gather(temp, gather_list, dst=dst_rank, group=gpc.get_cpu_group(parallel_mode))
+            dist.gather(temp, gather_list, dst=dst_rank, group=gpc.get_group(parallel_mode))
             param = torch.transpose(param, 0, dim)
         # update params in state_dict only on local rank 0
         if gpc.get_local_rank(parallel_mode) == 0:
@@ -97,15 +97,15 @@ def gather_tensor_parallel_state_dict(
 
 def _send_state_dict(state_dict, dst, parallel_mode):
     state_tensor, state_size = dist.distributed_c10d._object_to_tensor(state_dict)
-    dist.send(state_size, dst, group=gpc.get_cpu_group(parallel_mode))
-    dist.send(state_tensor, dst, group=gpc.get_cpu_group(parallel_mode))
+    dist.send(state_size, dst, group=gpc.get_group(parallel_mode))
+    dist.send(state_tensor, dst, group=gpc.get_group(parallel_mode))
 
 
 def _recv_state_dict(src, parallel_mode):
     state_size = torch.tensor([0], dtype=torch.long)
-    dist.recv(state_size, src, group=gpc.get_cpu_group(parallel_mode))
+    dist.recv(state_size, src, group=gpc.get_group(parallel_mode))
     state_tensor = torch.empty(state_size.item(), dtype=torch.uint8)
-    dist.recv(state_tensor, src, group=gpc.get_cpu_group(parallel_mode))
+    dist.recv(state_tensor, src, group=gpc.get_group(parallel_mode))
     state_dict = dist.distributed_c10d._tensor_to_object(state_tensor, state_size)
     return state_dict
 
@@ -142,7 +142,7 @@ def gather_pipeline_parallel_state_dict(state_dict):
         state_dict,
         gathered_states,
         dst=gpc.get_ranks_in_group(ParallelMode.PIPELINE)[0],
-        group=gpc.get_cpu_group(ParallelMode.PIPELINE),
+        group=gpc.get_group(ParallelMode.PIPELINE),
     )
 
     state_dict = (OrderedDict(chain.from_iterable(state.items() for state in gathered_states))

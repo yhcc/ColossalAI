@@ -14,6 +14,7 @@ from colossalai.utils import switch_virtual_pipeline_parallel_rank
 from colossalai.utils.cuda import get_current_device
 
 from ._base_schedule import BaseSchedule
+from colossalai.utils.megatron_timers import timer
 
 
 def get_tensor_shape():
@@ -126,6 +127,7 @@ class PipelineSchedule(BaseSchedule):
     def load_batch(self, data_iter):
         # Pipeline schedule just puts data in memory
         batch_data = super().load_batch(data_iter, to_gpu=False)
+        # TODO hack 一下这里，使得  batch size正确设置
         self.microbatch_offset = 0
         assert self.batch_size % self.num_microbatches == 0, \
             "Batch size should divided by the number of microbatches"
@@ -151,6 +153,7 @@ class PipelineSchedule(BaseSchedule):
             raise TypeError(f"Expected data to be of type torch.Tensor, list, tuple, or dict, but got {type(data)}")
 
     def load_micro_batch(self):
+        # TODO hack 这里使得可以加载 动态的 batch size
         mciro_batch_data = self._get_data_slice(self.batch_data, self.microbatch_offset)
         self.microbatch_offset += self.microbatch_size
         return self._move_to_device(mciro_batch_data)
@@ -237,7 +240,7 @@ class PipelineSchedule(BaseSchedule):
                 data.update(load_data)
         return data, label
 
-    def _forward_step(self, engine, input_obj, return_tensors, return_output_label=True, accum_loss=None):
+    def _forward_step(self, engine, input_obj, return_tensors, return_output_label=True, accum_loss=None, **kwargs):
         """Forward step for passed-in model. If it is the first stage, the input tensor 
         is obtained from data_iterator, otherwise the passed-in input_obj is used.
         Returns output tensor. This is a helper function and can be ignored by users.
@@ -254,24 +257,34 @@ class PipelineSchedule(BaseSchedule):
         micro_batch_data = self.load_micro_batch()
 
         data, label = self._get_data_label_for_current_step(input_obj, micro_batch_data, engine.criterion, engine.model)
-
+        timer('fwd').start()
         output_obj = self._call_engine(engine.model, data)
-
+        timer('fwd').stop()
         if gpc.is_last_rank(ParallelMode.PIPELINE):
+            # TODO 在这里进行后处理, 方便计算
+            # self._logger.info(f'rank:{gpc.get_global_rank()}, loss:{output_obj}')
+            timer('post_fn').start()
+            post_func = kwargs.get('post_fn')  # 吃进去两个参数，第一个是来自于 model 的输出，第二个是来自于 label 
+            if post_func is not None:
+                post_func(output_obj, label)
+            timer('post_fn').stop()
+
             if return_output_label:
                 return_tensors.append((output_obj, label))
             if accum_loss is not None:
+                timer('cal_loss').start()
                 loss_reduced = self._call_engine_criterion(engine, output_obj, label) / self.num_microbatches
                 accum_loss.add_(loss_reduced.detach())
+                timer('cal_loss').stop()
                 return loss_reduced
             else:
                 # forward only, it's useless since backward is not needed
                 return output_obj
         else:
-            if isinstance(output_obj, torch.Tensor):
-                self._logger.debug(
-                    f'Global rank {gpc.get_global_rank()}, pipeline rank {gpc.get_local_rank(ParallelMode.PIPELINE)} forward output tensor {output_obj.shape}, dtype {output_obj.dtype}'
-                )
+            # if isinstance(output_obj, torch.Tensor):
+            #     self._logger.debug(
+            #         f'Global rank {gpc.get_global_rank()}, pipeline rank {gpc.get_local_rank(ParallelMode.PIPELINE)} forward output tensor {output_obj.shape}, dtype {output_obj.dtype}'
+            #     )
             return output_obj
 
     def _backward_step(self, engine, input_obj, output_obj, output_obj_grad):
@@ -298,12 +311,13 @@ class PipelineSchedule(BaseSchedule):
                 for in_tensor in input_obj:
                     if in_tensor is not None:
                         in_tensor.retain_grad()
+        timer('bwd').start()
         # Backward pass.
         if output_obj_grad is None:
             engine.backward(output_obj)
         else:
             engine.backward_by_grad(output_obj, output_obj_grad)
-
+        timer('bwd').stop()
         # Collect the grad of the input_obj.
         input_obj_grad = None
         if input_obj is not None:
@@ -316,7 +330,7 @@ class PipelineSchedule(BaseSchedule):
 
         return input_obj_grad
 
-    def forward_backward_step(self, engine, data_iter, forward_only=False, return_loss=True, return_output_label=True):
+    def forward_backward_step(self, engine, data_iter, forward_only=False, return_loss=True, return_output_label=True, **kwargs):
         """Runs non-interleaved 1F1B schedule, with communication between pipeline stages.
         Returns a tuple with losses if the last stage, an empty tuple otherwise.
 
@@ -327,7 +341,7 @@ class PipelineSchedule(BaseSchedule):
                 Whether run forward step only. Default is false. If true, no backward will be run.
             return_loss (bool, optional): Whether returns the loss value. Default is true.
             return_output_label (bool, optional): If False, the output and label won't be returned.
-
+            kwargs: 为了获取 acc 等信息加入的参数
         Returns:
             Tuple[:class:`torch.Tensor`]: A tuple of (output, label, loss), loss and label could be None.
         """
@@ -368,7 +382,8 @@ class PipelineSchedule(BaseSchedule):
                                             input_obj,
                                             return_tensors,
                                             return_output_label=return_output_label,
-                                            accum_loss=accum_loss)
+                                            accum_loss=accum_loss,
+                                            **kwargs)
             if not gpc.is_last_rank(ParallelMode.PIPELINE):
                 if isinstance(output_obj, torch.Tensor):
                     bt_shapes = output_obj.shape
@@ -401,7 +416,8 @@ class PipelineSchedule(BaseSchedule):
                                             input_obj,
                                             return_tensors,
                                             return_output_label=return_output_label,
-                                            accum_loss=accum_loss)
+                                            accum_loss=accum_loss,
+                                            **kwargs)
             if forward_only:
                 comm.send_forward(output_obj, scatter_gather_tensors=self.scatter_gather_tensors)
 
@@ -551,10 +567,10 @@ class InterleavedPipelineSchedule(PipelineSchedule):
                 # forward only, it's useless since backward is not needed
                 return output_obj
         else:
-            if isinstance(output_obj, torch.Tensor):
-                self._logger.debug(
-                    f'Global rank {gpc.get_global_rank()}, pipeline rank {gpc.get_local_rank(ParallelMode.PIPELINE)} forward output tensor {output_obj.shape}, dtype {output_obj.dtype}'
-                )
+            # if isinstance(output_obj, torch.Tensor):
+            #     self._logger.debug(
+            #         f'Global rank {gpc.get_global_rank()}, pipeline rank {gpc.get_local_rank(ParallelMode.PIPELINE)} forward output tensor {output_obj.shape}, dtype {output_obj.dtype}'
+            #     )
             return output_obj
 
     def forward_backward_step(self, engine, data_iter, forward_only=False, return_loss=True, return_output_label=True):

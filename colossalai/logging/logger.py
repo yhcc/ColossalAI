@@ -57,7 +57,8 @@ class DistributedLogger:
 
             self._name = name
             self._logger = logging.getLogger(name)
-            self._logger.setLevel(logging.INFO)
+            handler.setLevel(logging.INFO)  # 否则 logger 都无法设置其它level了
+            # self._logger.setLevel(logging.INFO)
             if handler is not None:
                 self._logger.addHandler(handler)
             self._logger.propagate = False
@@ -124,7 +125,7 @@ class DistributedLogger:
         # add file handler
         file_handler = logging.FileHandler(path, mode)
         file_handler.setLevel(getattr(logging, level))
-        formatter = logging.Formatter('colossalai - %(name)s - %(levelname)s: %(message)s')
+        formatter = logging.Formatter('colossalai - %(asctime)s - %(name)s - %(levelname)s: %(message)s')
         file_handler.setFormatter(formatter)
         self._logger.addHandler(file_handler)
 
@@ -152,6 +153,19 @@ class DistributedLogger:
         message_prefix = "{}:{} {}".format(*self.__get_call_info())
         self._log('info', message_prefix, parallel_mode, ranks)
         self._log('info', message, parallel_mode, ranks)
+
+    def debug(self, message: str, parallel_mode: ParallelMode = ParallelMode.GLOBAL, ranks: List[int] = None) -> None:
+        """log an debug message.
+
+        Args:
+            message (str): The message to be logged.
+            parallel_mode (:class:`colossalai.context.parallel_mode.ParallelMode`):
+                The parallel mode used for logging. Defaults to ParallelMode.GLOBAL.
+            ranks (List[int]): List of parallel ranks.
+        """
+        message_prefix = "{}:{} {}".format(*self.__get_call_info())
+        self._log('debug', message_prefix, parallel_mode, ranks)
+        self._log('debug', message, parallel_mode, ranks)
 
     def warning(self, message: str, parallel_mode: ParallelMode = ParallelMode.GLOBAL, ranks: List[int] = None) -> None:
         """Log a warning message.

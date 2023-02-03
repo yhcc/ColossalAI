@@ -6,6 +6,20 @@ import enum
 import torch
 import torch.nn as nn
 
+try:
+    from colossalai._C import scaled_masked_softmax
+except ImportError:
+    from colossalai.kernel.op_builder.scaled_masked_softmax import ScaledMaskedSoftmaxBuilder
+    scaled_masked_softmax = ScaledMaskedSoftmaxBuilder().load()
+
+
+try:
+    from colossalai._C import scaled_upper_triangle_masked_softmax
+except ImportError:
+    from colossalai.kernel.op_builder.scaled_upper_triangle_masked_softmax import ScaledUpperTrainglemaskedSoftmaxBuilder
+    scaled_upper_triang_masked_softmax = ScaledUpperTrainglemaskedSoftmaxBuilder().load()
+
+
 
 class AttnMaskType(enum.Enum):
     padding = 1
@@ -23,20 +37,16 @@ class ScaledUpperTriangMaskedSoftmax(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, inputs, scale):
-        from colossalai.kernel import scaled_upper_triang_masked_softmax
-
         scale_t = torch.tensor([scale])
-        softmax_results = scaled_upper_triang_masked_softmax.forward(inputs, scale_t[0])
+        softmax_results = scaled_upper_triangle_masked_softmax.forward(inputs, scale_t[0])
 
         ctx.save_for_backward(softmax_results, scale_t)
         return softmax_results
 
     @staticmethod
     def backward(ctx, output_grads):
-        from colossalai.kernel import scaled_upper_triang_masked_softmax
-
         softmax_results, scale_t = ctx.saved_tensors
-        input_grads = scaled_upper_triang_masked_softmax.backward(output_grads, softmax_results, scale_t[0])
+        input_grads = scaled_upper_triangle_masked_softmax.backward(output_grads, softmax_results, scale_t[0])
 
         return input_grads, None
 
@@ -52,12 +62,6 @@ class ScaledMaskedSoftmax(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, inputs, mask, scale):
-        try:
-            from colossalai._C import scaled_masked_softmax
-        except ImportError:
-            from colossalai.kernel.op_builder.scaled_masked_softmax import ScaledMaskedSoftmaxBuilder
-            scaled_masked_softmax = ScaledMaskedSoftmaxBuilder().load()
-
         scale_t = torch.tensor([scale])
 
         softmax_results = scaled_masked_softmax.forward(inputs, mask, scale_t[0])
@@ -66,12 +70,6 @@ class ScaledMaskedSoftmax(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, output_grads):
-        try:
-            from colossalai._C import scaled_masked_softmax
-        except ImportError:
-            from colossalai.kernel.op_builder.scaled_masked_softmax import ScaledMaskedSoftmaxBuilder
-            scaled_masked_softmax = ScaledMaskedSoftmaxBuilder().load()
-
         softmax_results, scale_t = ctx.saved_tensors
 
         input_grads = scaled_masked_softmax.backward(output_grads, softmax_results, scale_t[0])

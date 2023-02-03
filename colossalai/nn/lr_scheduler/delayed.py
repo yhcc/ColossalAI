@@ -94,6 +94,20 @@ class WarmupScheduler(_LRScheduler):
             raise NotImplementedError()
         return state_dict
 
+    def load_state_dict(self, state_dict):
+        # state_dict = {key: value for key, value in self.__dict__.items() if key not in 'optimizer'}
+        for key in list(self.__dict__.keys()):
+            if key in state_dict:
+               self.__dict__[key] = state_dict[key] 
+        if isinstance(self.after_scheduler, _LRScheduler):
+            assert state_dict['after_scheduler_type'] == type(self.after_scheduler).__name__
+            # state_dict['after_scheduler_dict'] = state_dict['after_scheduler'].state_dict()
+            self.after_scheduler.load_state_dict(state_dict['after_scheduler_dict'])
+            # del state_dict['after_scheduler']
+        else:
+            raise NotImplementedError()
+        return state_dict
+
     def get_lr(self):
         if self.last_epoch >= self.warmup_epochs:
             if not self.finished:

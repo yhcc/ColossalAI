@@ -103,3 +103,25 @@ class DynamicGradScaler(BaseGradScaler):
         self._scale = self._scale * self._growth_factor
         if self._max_scale:
             self._scale = torch.min(self._scale, self._max_scale)
+
+    def state_dict(self):
+        """Returns the states of the gradient scaler as a dict object.
+        """
+
+        state_dict = dict()
+        state_dict['_scale'] = self._scale.item()
+        state_dict['_growth_step'] = self._growth_step
+        state_dict['_hysteresis_step'] = self._hysteresis_step
+
+        return state_dict
+
+    def load_state_dict(self, state_dict):
+        """Load the states of the gradient scaler from a dict object.
+
+        Args:
+            state_dict (dict): the states of the gradient scaler
+        """
+
+        self._scale = self._scale.fill_(state_dict['_scale'])
+        self._growth_step = state_dict['_growth_step']
+        self._hysteresis_step = state_dict['_hysteresis_step']

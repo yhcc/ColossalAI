@@ -73,7 +73,10 @@ class BaseSchedule(ABC):
         """
         if data_iter is None:
             raise RuntimeError('Dataloader is not defined.')
-        batch_data = next(data_iter)
+        try:
+            batch_data = next(data_iter)
+        except TypeError:  # 有可能是直接传入的 batch 数据
+            batch_data = data_iter
 
         if to_gpu:
             batch_data = self._move_to_device(batch_data)

@@ -101,5 +101,7 @@ class VocabParallelCrossEntropyLoss1D(_Loss):
         """
         loss = _VocabParallelCrossEntropy1D.apply(logits, targets, process_group)
         if self.reduction_mean:
-            loss = loss.mean()
+            mask = targets.eq(-100).view_as(loss)
+            loss = loss.masked_fill(mask, 0).sum()/(targets.numel() - mask.sum())
+            # loss = loss.mean()
         return loss

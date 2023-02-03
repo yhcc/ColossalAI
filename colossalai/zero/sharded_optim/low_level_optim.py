@@ -16,7 +16,7 @@ from colossalai.utils import is_using_pp
 
 from torch._six import inf
 from colossalai.utils.common import _calc_l2_norm, _calc_lp, _get_tensor_norm, _move_norm_to_cuda
-from colossalai.constants import IS_TENSOR_PARALLEL, NUM_PARTITIONS
+from colossalai.constants import IS_TENSOR_PARALLEL
 from colossalai.tensor import ColoTensor
 from colossalai.tensor.distspec import DistPlacementPattern
 
@@ -30,6 +30,7 @@ from ._utils import (
     sync_param,
 )
 from .bookkeeping import BucketStore, GradientStore, ParameterStore, TensorBucket
+from colossalai.utils.megatron_timers import timer
 
 
 class LowLevelZeroOptimizer(ColossalaiOptimizer):
@@ -173,7 +174,7 @@ class LowLevelZeroOptimizer(ColossalaiOptimizer):
             for rank in range(self._world_size):
                 flat_tensor = self._param_store.get_flat_fp16_param_by_rank_group(rank, group_id)
                 tensor_list = self._param_store.get_fp16_params_by_rank_group(rank, group_id)
-                sync_param(flat_tensor=flat_tensor, tensor_list=tensor_list)
+                sync_param(flat_tensor=flat_tensor, tensor_list=tensor_list)  # 似乎是通过这一步，flat的param和之前的就对接起来了
 
             # create a copy of fp32 weights of the parameters for which this rank is responsible
             fp16_flat_current_rank = self._param_store.get_flat_fp16_param_by_rank_group(self._local_rank, group_id)
@@ -191,7 +192,7 @@ class LowLevelZeroOptimizer(ColossalaiOptimizer):
             # set reduction state
             for param in self._fp16_param_groups[group_id]:
                 self._param_store.set_param_reduction_state(param, False)
-
+        assert len(self._fp16_param_groups) != 0
         # intialize communication stream for
         # communication-compuation overlapping
         if self._overlap_communication:
@@ -433,8 +434,10 @@ class LowLevelZeroOptimizer(ColossalaiOptimizer):
 
     def step(self, closure=None):
         if is_using_pp():
+            timer('sync_grad').start()
             self._reduce_grad()
             self.sync_grad()
+            timer('sync_grad').stop()
         return self._step(closure=closure)
 
 
@@ -443,7 +446,7 @@ class LowLevelZeroOptimizer(ColossalaiOptimizer):
 
         # check for overflow
         found_inf = self._check_overflow()
-        loss_scale = self.loss_scale.item()  # backup, later it will be used for computing
+        loss_scale = float(self.loss_scale.item())  # backup, later it will be used for computing
         self.grad_scaler.update(found_inf)
 
         # update loss scale if overflow occurs
@@ -456,7 +459,7 @@ class LowLevelZeroOptimizer(ColossalaiOptimizer):
         single_grad_partition_groups = []
         norm_groups = []
         global_norm = None
-
+        timer('cal_norm').start()
         for group_id in range(self.num_param_groups):
             # compute norm
             gradients = self._grad_store.get_averaged_gradients_by_group(group_id)
@@ -489,7 +492,9 @@ class LowLevelZeroOptimizer(ColossalaiOptimizer):
         if self._clip_grad_norm>0:
             global_norm = sum(norm_groups)**0.5
         self._unscale_and_clip_grads(single_grad_partition_groups, global_norm, loss_scale)
+        timer('cal_norm').stop()
         # update the parameters
+        timer('step').start()
         self.optim.step()
         # release the fp32 grad
         release_param_grad(self._fp32_flat_param_groups_of_current_rank.values())
@@ -511,7 +516,8 @@ class LowLevelZeroOptimizer(ColossalaiOptimizer):
 
         for handle in handles:
             handle.wait()
-
+        timer('step').stop()
+        # 这里可能不需要 update gradients , 是由于在初始化中使用 sync_params 函数，所以保持了同步
         return True, global_norm/loss_scale
 
     ##################
@@ -613,10 +619,52 @@ class LowLevelZeroOptimizer(ColossalaiOptimizer):
 
     # TODO 需要加入state_dict方法
     def state_dict(self):
-        raise RuntimeError()
+        states = {}
+        grad_scaler = self.grad_scaler.state_dict()
+        # TODO 需要考虑没有 grad_scaler 的情况
+        states['grad_scaler'] = grad_scaler
+
+        # 传入的 optimizer 的 state , todo 如果这个optimizer还没跑过就state dict的话，可能会导致其中的一些东西不存在，可能会在之后报错？
+        optim_states = self.optim.state_dict()  
+        states['base_optim_states'] = optim_states
+
+        # 自身管理的 fp32 的权重部分
+        flat_fp32_weights = {}
+        for group_id, param in self._fp32_flat_param_groups_of_current_rank.items():
+            assert param.grad is None
+            flat_fp32_weights[group_id] = param
+        states['flat_fp32_weights'] = flat_fp32_weights
+
+        # TODO 应该还需要有一些sanity check的内容
+
+        # TODO 需要考虑出现 dp 数量变化的情况
+
+        return states
 
     def load_state_dict(self, states):
-        raise RuntimeError()
+        # TODO 需要考虑出现 dp 数量变化的情况
+
+        # TODO 需要考虑没有 loss_scaler 的情况
+        grad_scaler = states['grad_scaler']
+        self.grad_scaler.load_state_dict(grad_scaler)
+
+        # load optimizer
+        optim_states = states['base_optim_states']
+        self.optim.load_state_dict(optim_states)
+
+        # fp32 权重
+        flat_fp32_weights = states['flat_fp32_weights']
+        assert set(flat_fp32_weights.keys()) == set(self._fp32_flat_param_groups_of_current_rank)
+        for group_id, param in flat_fp32_weights.items():
+            _param = self._fp32_flat_param_groups_of_current_rank[group_id]
+            assert _param.shape == param.shape
+            _param.data.copy_(param.data)
+        # 需要对model的进行赋值
+        for group_id in range(len(self._fp16_param_groups)):
+            fp16_param = self._param_store.get_flat_fp16_param_by_rank_group(rank=self._local_rank, group_id=group_id)
+            fp32_param = self._fp32_flat_param_groups_of_current_rank[group_id]
+            fp16_param.data.copy_(fp32_param)  # 自动也就改变了 model 那边的值了
+
 
 def is_model_parallel_parameter(p):
     # colossalai.utils.common.is_model_parallel_parameter cannot process the ColoParam 

@@ -19,6 +19,7 @@ from torch.nn.parameter import Parameter
 from torch.optim import Optimizer
 from colossalai.gemini.stateful_tensor import (StatefulTensor, TensorState)
 from colossalai.gemini.tensor_placement_policy import AutoTensorPlacementPolicy
+from colossalai.utils import clip_grad_norm_fp32
 
 
 class OptimState(Enum):
@@ -180,7 +181,10 @@ class ShardedOptimizerV2(ColossalaiOptimizer):
         if self.optim_state == OptimState.SCALED:
             self._prepare_grads()
             self._unscale_grads()
-        return super().clip_grad_norm(model, max_norm)
+        if max_norm > 0.0:
+            return clip_grad_norm_fp32(model.parameters(), max_norm)
+
+        return -1
 
     def step(self, *args, **kwargs):
 
@@ -196,7 +200,7 @@ class ShardedOptimizerV2(ColossalaiOptimizer):
         if found_inf:
             self._logger.warning('found inf during ShardedOptimV2 step')
             self._zero_grad(recover_data=True)
-            return
+            return False
 
         self._point_param_fp16_to_master_param()
 

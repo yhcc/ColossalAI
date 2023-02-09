@@ -30,7 +30,7 @@ class MetricTracker(Thread):
             if os.getenv("SLURM_JOB_ID") is not None:
                 job_id = os.getenv("SLURM_JOB_ID")
 
-            job_name = "unknown"
+            job_name = "none"
             if os.getenv("SLURM_JOB_NAME") is not None:
                 job_name = os.getenv("SLURM_JOB_NAME")
 
@@ -44,23 +44,25 @@ class MetricTracker(Thread):
             mem = psutil.virtual_memory()
             mem_util = mem[2]
 
-            gpu_rank = "unknown"
+            gpu_rank = "none"
             if os.getenv("SLURM_PROCID") is not None:
                 gpu_rank = int(os.getenv("SLURM_PROCID"))
 
-            local_gpu_rank = "unknown"
+            local_gpu_rank = "none"
             if os.getenv("SLURM_LOCALID") is not None:
                 local_gpu_rank = os.getenv("SLURM_LOCALID")
 
-            if local_gpu_rank != "unknown":
+            gpu_util = "none"
+            gpu_mem_util = "none"
+            if local_gpu_rank != "none":
                 local_gpu_rank = int(local_gpu_rank)
 
-            gpus = GPUtil.getGPUs()
-            # TODO: need to check the whether the rank is related to the order of
-            # the gpu list
-            gpu = gpus[local_gpu_rank]
-            gpu_util = gpu.load * 100
-            gpu_mem_util = gpu.memoryUtil * 100
+                gpus = GPUtil.getGPUs()
+                # TODO: need to check the whether the rank is related to the order of
+                # the gpu list
+                gpu = gpus[local_gpu_rank]
+                gpu_util = gpu.load * 100
+                gpu_mem_util = gpu.memoryUtil * 100
 
             metric_dict = {
                 "key": key,

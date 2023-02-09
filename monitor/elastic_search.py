@@ -1,9 +1,9 @@
 from elasticsearch import Elasticsearch
 
 from colossalai.logging import get_dist_logger
-from monitor.types import MetricType
+from monitor.types import ES_METRIC_SUBMIT_URL, MetricType
 
-es = Elasticsearch(hosts=["http://10.140.0.75:9200"], request_timeout=30)
+es = Elasticsearch(hosts=[ES_METRIC_SUBMIT_URL], request_timeout=30)
 logger = get_dist_logger(name="colossalai_monitor")
 
 
@@ -21,9 +21,10 @@ def put_metric_to_elastic_search(metric_type: MetricType, metric_value: dict) ->
     """
 
     try:
+        logger.debug(f"Submit metrics to ES: {metric_type.value}: {metric_value}")
         response = es.index(index=metric_type.value, document=metric_value, timeout="30s")
         logger.debug(message=response)
         return True
-    except Exception as error:
+    except Exception as error:    # pylint: disable=broad-except
         logger.error(message=error)
         return False

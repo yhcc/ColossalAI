@@ -1,3 +1,5 @@
+import os
+import socket
 import time
 from threading import Thread
 
@@ -5,7 +7,6 @@ import GPUtil
 import psutil
 
 from monitor import elastic_search as es
-from monitor.types import MetricType
 
 
 class MetricTracker(Thread):
@@ -25,32 +26,55 @@ class MetricTracker(Thread):
         """
 
         while not self.stopped:
+            job_id = "none"
+            if os.getenv("SLURM_JOB_ID") is not None:
+                job_id = os.getenv("SLURM_JOB_ID")
+
+            job_name = "unknown"
+            if os.getenv("SLURM_JOB_NAME") is not None:
+                job_name = os.getenv("SLURM_JOB_NAME")
+
+            key = f"{job_id}_{job_name}"
+
+            hostname = socket.gethostname()
+            timestamp = int(time.time())
+
             cpu_util = psutil.cpu_percent()
-            cpu_util_dict = {"cpu_util": f"{cpu_util}%"}
-            es.put_metric_to_elastic_search(MetricType.NODE_CPU_UTIL, cpu_util_dict)
 
             mem = psutil.virtual_memory()
-            mem_total = mem[0]
-            mem_available = mem[1]
             mem_util = mem[2]
 
-            mem_total_dict = {"mem_total": f"{mem_total}Bytes"}
-            mem_available_dict = {"mem_available": f"{mem_available}Bytes"}
-            mem_util_dict = {"mem_util": f"{mem_util}%"}
+            gpu_rank = "unknown"
+            if os.getenv("SLURM_PROCID") is not None:
+                gpu_rank = int(os.getenv("SLURM_PROCID"))
 
-            es.put_metric_to_elastic_search(MetricType.NODE_MEM_TOTAL, mem_total_dict)
-            es.put_metric_to_elastic_search(MetricType.NODE_MEM_AVAIL, mem_available_dict)
-            es.put_metric_to_elastic_search(MetricType.NODE_MEM_UTIL, mem_util_dict)
+            local_gpu_rank = "unknown"
+            if os.getenv("SLURM_LOCALID") is not None:
+                local_gpu_rank = os.getenv("SLURM_LOCALID")
+
+            if local_gpu_rank != "unknown":
+                local_gpu_rank = int(local_gpu_rank)
 
             gpus = GPUtil.getGPUs()
-            for gpu in gpus:
-                gpu_id_dict = {"gpu_id": f"{gpu.id}"}
-                gpu_load_dict = {"gpu_load": f"{gpu.load * 100}%"}
-                gpu_mem_util_dict = {"gpu_mem_util": f"{gpu.memoryUtil * 100}%"}
+            # TODO: need to check the whether the rank is related to the order of
+            # the gpu list
+            gpu = gpus[local_gpu_rank]
+            gpu_util = gpu.load * 100
+            gpu_mem_util = gpu.memoryUtil * 100
 
-                es.put_metric_to_elastic_search(MetricType.GPU_ID, gpu_id_dict)
-                es.put_metric_to_elastic_search(MetricType.GPU_UTIL, gpu_load_dict)
-                es.put_metric_to_elastic_search(MetricType.GPU_MEM_UTIL, gpu_mem_util_dict)
+            metric_dict = {
+                "key": key,
+                "timestamp": timestamp,
+                "hostname": hostname,
+                "cpu_util": cpu_util,
+                "mem_util": mem_util,
+                "gpu_rank": gpu_rank,
+                "local_gpu_rank": local_gpu_rank,
+                "gpu_util": gpu_util,
+                "gpu_mem_util": gpu_mem_util,
+            }
+
+            es.put_metric_to_elastic_search(metric_dict)
 
             time.sleep(self.interval)
 

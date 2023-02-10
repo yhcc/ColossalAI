@@ -44,6 +44,8 @@ class MetricTracker(Thread):
             mem = psutil.virtual_memory()
             mem_util = mem[2]
 
+            network_io = psutil.net_io_counters(pernic=True)
+
             gpu_rank = "none"
             if os.getenv("SLURM_PROCID") is not None:
                 gpu_rank = int(os.getenv("SLURM_PROCID"))
@@ -52,29 +54,44 @@ class MetricTracker(Thread):
             if os.getenv("SLURM_LOCALID") is not None:
                 local_gpu_rank = os.getenv("SLURM_LOCALID")
 
-            gpu_util = "none"
-            gpu_mem_util = "none"
-            if local_gpu_rank != "none":
-                local_gpu_rank = int(local_gpu_rank)
-
-                gpus = GPUtil.getGPUs()
-                # TODO: need to check the whether the rank is related to the order of
-                # the gpu list
-                gpu = gpus[local_gpu_rank]
-                gpu_util = gpu.load * 100
-                gpu_mem_util = gpu.memoryUtil * 100
-
             metric_dict = {
                 "key": key,
                 "timestamp": timestamp,
                 "hostname": hostname,
                 "cpu_util": cpu_util,
                 "mem_util": mem_util,
+                "network_io": network_io,
                 "gpu_rank": gpu_rank,
                 "local_gpu_rank": local_gpu_rank,
-                "gpu_util": gpu_util,
-                "gpu_mem_util": gpu_mem_util,
+                "gpu_info": [],
             }
+
+            if os.getenv("CUDA_VISIBLE_DEVICES") is not None:
+                # Get the GPU info in this node
+                gpus = GPUtil.getGPUs()
+
+                gpu_device_ids = os.getenv("CUDA_VISIBLE_DEVICES")
+                gpu_device_id_list = gpu_device_ids.split(",")
+
+                for device_id_str in gpu_device_id_list:
+                    try:
+                        device_id = int(device_id_str)
+                        selected_gpu = gpus[device_id]
+                        gpu_device_id = selected_gpu.id
+                        gpu_name = selected_gpu.name
+                        gpu_util = selected_gpu.load * 100
+                        gpu_mem_util = selected_gpu.memoryUtil * 100
+
+                        metric_dict["gpu_info"].append(
+                            {
+                                "gpu_device_id": gpu_device_id,
+                                "gpu_name": gpu_name,
+                                "gpu_util": gpu_util,
+                                "gpu_mem_util": gpu_mem_util,
+                            }
+                        )
+                    except ValueError:
+                        continue
 
             es.put_metric_to_elastic_search(metric_dict)
 

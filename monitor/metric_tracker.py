@@ -25,6 +25,9 @@ class MetricTracker(Thread):
         Run the metric tracker.
         """
 
+        def format_2_decimal(num: float) -> float:
+            return float(f"{num:.2f}")
+
         while not self.stopped:
             job_id = "none"
             if os.getenv("SLURM_JOB_ID") is not None:
@@ -39,12 +42,15 @@ class MetricTracker(Thread):
             hostname = socket.gethostname()
             timestamp = int(time.time())
 
-            cpu_util = psutil.cpu_percent()
+            cpu_util = format_2_decimal(psutil.cpu_percent())
 
             mem = psutil.virtual_memory()
-            mem_util = mem[2]
+            mem_util = format_2_decimal(mem[2])
 
             network_io = psutil.net_io_counters(pernic=True)
+            for interface in list(network_io.keys()):
+                if "lo" in interface or "bond" in interface:
+                    del network_io[interface]
 
             gpu_rank = "none"
             if os.getenv("SLURM_PROCID") is not None:
@@ -77,10 +83,11 @@ class MetricTracker(Thread):
                     try:
                         device_id = int(device_id_str)
                         selected_gpu = gpus[device_id]
+
                         gpu_device_id = selected_gpu.id
                         gpu_name = selected_gpu.name
-                        gpu_util = selected_gpu.load * 100
-                        gpu_mem_util = selected_gpu.memoryUtil * 100
+                        gpu_util = format_2_decimal(selected_gpu.load * 100)
+                        gpu_mem_util = format_2_decimal(selected_gpu.memoryUtil * 100)
 
                         metric_dict["gpu_info"].append(
                             {

@@ -13,9 +13,13 @@ from monitor import elastic_search as es
 class MetricTracker(Thread):
     """
     Track resource usage during task training.
+
+    Args:
+        interval (float): The tracking interval. By default, 15 seconds.
+
     """
 
-    def __init__(self, interval):
+    def __init__(self, interval: float = 15):
         super(MetricTracker, self).__init__()
         self.stopped = False
         self.interval = interval

@@ -6,8 +6,9 @@ from threading import Thread
 
 import GPUtil
 import psutil
+from elasticsearch import Elasticsearch
 
-from monitor import elastic_search as es
+from monitor import elastic_search as es_util
 
 
 class MetricTracker(Thread):
@@ -15,12 +16,14 @@ class MetricTracker(Thread):
     Track resource usage during task training.
 
     Args:
+        es_server_address (str): The server address of elastic search service.
         interval (float): The tracking interval. By default, 15 seconds.
 
     """
 
-    def __init__(self, interval: float = 15):
+    def __init__(self, es_server_address: str, interval: float = 15):
         super(MetricTracker, self).__init__()
+        self.elastic_search = Elasticsearch(hosts=[es_server_address], request_timeout=30)
         self.stopped = False
         self.interval = interval
         self.start()
@@ -103,7 +106,7 @@ class MetricTracker(Thread):
                         "gpu_mem_util": gpu_mem_util,
                     }
 
-                es.put_metric_to_elastic_search(metric_dict)
+                es_util.put_metric_to_elastic_search(self.elastic_search, metric_dict)
             except ValueError:
                 continue
 

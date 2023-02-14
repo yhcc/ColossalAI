@@ -60,22 +60,6 @@ class MetricTracker(Thread):
                 mem = psutil.virtual_memory()
                 mem_util = format_2_decimal(mem[2])
 
-                raw_network_io = psutil.net_io_counters(pernic=True)
-                ib_network_io = {}
-                for interface in raw_network_io:
-                    if re.search("^ib[0-9]+", interface):
-                        raw_network_io_info = raw_network_io[interface]
-                        ib_network_io[interface] = {
-                            "bytes_sent": raw_network_io_info.bytes_sent,
-                            "bytes_received": raw_network_io_info.bytes_recv,
-                            "packets_sent": raw_network_io_info.packets_sent,
-                            "packets_received": raw_network_io_info.bytes_recv,
-                            "error_in": raw_network_io_info.errin,
-                            "error_out": raw_network_io_info.errout,
-                            "drop_in": raw_network_io_info.dropin,
-                            "drop_out": raw_network_io_info.dropout,
-                        }
-
                 gpu_rank = "none"
                 if os.getenv("SLURM_PROCID") is not None:
                     gpu_rank = int(os.getenv("SLURM_PROCID"))
@@ -90,11 +74,25 @@ class MetricTracker(Thread):
                     "hostname": hostname,
                     "cpu_util": cpu_util,
                     "mem_util": mem_util,
-                    "ib_network_io": ib_network_io,
                     "gpu_rank": gpu_rank,
                     "local_gpu_rank": local_gpu_rank,
                     "gpu_info": "none",
                 }
+
+                raw_network_io = psutil.net_io_counters(pernic=True)
+                for interface in raw_network_io:
+                    if re.search("^ib[0-9]+", interface):
+                        raw_network_io_info = raw_network_io[interface]
+                        metric_dict[interface] = {
+                            "bytes_sent": raw_network_io_info.bytes_sent,
+                            "bytes_received": raw_network_io_info.bytes_recv,
+                            "packets_sent": raw_network_io_info.packets_sent,
+                            "packets_received": raw_network_io_info.bytes_recv,
+                            "error_in": raw_network_io_info.errin,
+                            "error_out": raw_network_io_info.errout,
+                            "drop_in": raw_network_io_info.dropin,
+                            "drop_out": raw_network_io_info.dropout,
+                        }
 
                 if os.getenv("CUDA_VISIBLE_DEVICES") is not None and isinstance(local_gpu_rank, int):
                     # Get the GPU device list in string format

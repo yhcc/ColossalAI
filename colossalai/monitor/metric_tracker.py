@@ -2,13 +2,15 @@ import os
 import re
 import socket
 import time
+from datetime import datetime
 from threading import Thread
 
 import GPUtil
 import psutil
+import pytz
 from elasticsearch import Elasticsearch
 
-from monitor import elastic_search as es_util
+from colossalai.monitor import elastic_search as es_util
 
 
 class MetricTracker(Thread):
@@ -49,7 +51,9 @@ class MetricTracker(Thread):
                 key = f"{job_id}_{job_name}"
 
                 hostname = socket.gethostname()
-                timestamp = int(time.time())
+
+                tz = pytz.timezone("Asia/Shanghai")
+                timestamp = datetime.now(tz)
 
                 cpu_util = format_2_decimal(psutil.cpu_percent())
 

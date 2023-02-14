@@ -1,7 +1,7 @@
 from elasticsearch import Elasticsearch
 
 from colossalai.logging import get_dist_logger
-from monitor.types import ES_INDEX
+from colossalai.monitor.types import ES_INDEX
 
 logger = get_dist_logger(name=ES_INDEX)
 

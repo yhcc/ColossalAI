@@ -52,8 +52,8 @@ class MetricTracker(Thread):
 
                 hostname = socket.gethostname()
 
-                tz = pytz.timezone("Asia/Shanghai")
-                timestamp = datetime.now(tz)
+                time_zone = pytz.timezone("Asia/Shanghai")
+                timestamp = datetime.now(time_zone)
 
                 cpu_util = format_2_decimal(psutil.cpu_percent())
 
@@ -64,7 +64,17 @@ class MetricTracker(Thread):
                 ib_network_io = {}
                 for interface in raw_network_io:
                     if re.search("^ib[0-9]+", interface):
-                        ib_network_io[interface] = raw_network_io[interface]
+                        raw_network_io_info = raw_network_io[interface]
+                        ib_network_io[interface] = {
+                            "bytes_sent": raw_network_io_info.bytes_sent,
+                            "bytes_received": raw_network_io_info.bytes_recv,
+                            "packets_sent": raw_network_io_info.packets_sent,
+                            "packets_received": raw_network_io_info.bytes_recv,
+                            "error_in": raw_network_io_info.errin,
+                            "error_out": raw_network_io_info.errout,
+                            "drop_in": raw_network_io_info.dropin,
+                            "drop_out": raw_network_io_info.dropout,
+                        }
 
                 gpu_rank = "none"
                 if os.getenv("SLURM_PROCID") is not None:

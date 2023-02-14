@@ -87,7 +87,7 @@ class MetricTracker(Thread):
                             "bytes_sent": raw_network_io_info.bytes_sent,
                             "bytes_received": raw_network_io_info.bytes_recv,
                             "packets_sent": raw_network_io_info.packets_sent,
-                            "packets_received": raw_network_io_info.bytes_recv,
+                            "packets_received": raw_network_io_info.packets_recv,
                             "error_in": raw_network_io_info.errin,
                             "error_out": raw_network_io_info.errout,
                             "drop_in": raw_network_io_info.dropin,

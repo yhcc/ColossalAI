@@ -1,12 +1,12 @@
 import logging
 from logging.handlers import RotatingFileHandler
 
-from .cmreslogging.handlers import CMRESHandler
+from colossalai.logging.cmreslogging.handlers import CMRESHandler
 
 # Default elastic search server host
 DEFAULT_ES_HOST = "http://10.140.0.75:9200"
 # Default log file name
-DEFAULT_FILE_NAME = "python_es.log"
+DEFAULT_FILE_NAME = "python_cmres.log"
 
 
 def setup_logger(

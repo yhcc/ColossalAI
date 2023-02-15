@@ -1,6 +1,6 @@
 import time
 
-from colossalai.logging.es_logger import setup_logger
+from .es_logger import setup_logger
 
 logger = setup_logger(__file__)
 

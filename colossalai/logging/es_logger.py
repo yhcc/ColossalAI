@@ -1,7 +1,7 @@
 import logging
 from logging.handlers import RotatingFileHandler
 
-from colossalai.logging.cmreslogging.handlers import CMRESHandler
+from .cmreslogging.handlers import CMRESHandler
 
 # Default elastic search server host
 DEFAULT_ES_HOST = "http://10.140.0.75:9200"

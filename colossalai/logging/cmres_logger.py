@@ -14,13 +14,13 @@ def setup_logger(
     log_level: int = logging.INFO,
     file_name: str = DEFAULT_FILE_NAME,
 ) -> logging.Logger:
-    """Configure the logger that is used for uniscale framework.
+    """Configure the logger.
 
     Args:
         logger_name (str): Used to create or get the correspoding logger in
             getLogger call. It will get the root logger by default.
-        log_level : Default is logging.DEBUG.
-        file_name (str): Log file name, default is "python_es.log".
+        log_level (int): Default is logging.INFO.
+        file_name (str): Log file name, default is "python_cmres.log".
 
     Returns:
         logger (logging.Logger): the created or modified logger.

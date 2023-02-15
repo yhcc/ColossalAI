@@ -9,7 +9,11 @@ DEFAULT_ES_HOST = "http://10.140.0.75:9200"
 DEFAULT_FILE_NAME = "python_es.log"
 
 
-def setup_logger(logger_name: str, log_level=logging.INFO, file_name: str = DEFAULT_FILE_NAME) -> logging.Logger:
+def setup_logger(
+    logger_name: str,
+    log_level: int = logging.INFO,
+    file_name: str = DEFAULT_FILE_NAME,
+) -> logging.Logger:
     """Configure the logger that is used for uniscale framework.
 
     Args:
@@ -23,17 +27,15 @@ def setup_logger(logger_name: str, log_level=logging.INFO, file_name: str = DEFA
 
     """
 
-    log_format = logging.Formatter("[%(levelname)s] %(asctime)s - %(message)s")
-
     logger = logging.getLogger(logger_name)
+    logger.setLevel(logging.DEBUG)
 
     es_handler = CMRESHandler(hosts=[DEFAULT_ES_HOST])
-    es_handler.setFormatter(log_format)
     es_handler.setLevel(logging.DEBUG)
     logger.addHandler(es_handler)
 
     file_handler = RotatingFileHandler(filename=file_name)
-    file_handler.setFormatter(log_format)
+    file_handler.setFormatter(logging.Formatter("[%(levelname)s] %(asctime)s - %(message)s"))
     file_handler.setLevel(log_level)
     logger.addHandler(file_handler)
 

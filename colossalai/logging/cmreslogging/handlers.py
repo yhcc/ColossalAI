@@ -10,7 +10,7 @@ from threading import Lock, Timer
 from elasticsearch import Elasticsearch
 from elasticsearch import helpers as eshelpers
 
-from cmreslogging.serializers import CMRESSerializer
+from colossalai.logging.cmreslogging.serializers import CMRESSerializer
 
 
 class CMRESHandler(logging.Handler):

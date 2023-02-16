@@ -68,6 +68,10 @@ class MetricTracker(Thread):
                 if os.getenv("SLURM_LOCALID") is not None:
                     local_gpu_rank = int(os.getenv("SLURM_LOCALID"))
 
+                flops = 0.0
+                if os.getenv("FLOPS") is not None:
+                    flops = float(os.getenv("FLOPS"))
+
                 metric_dict = {
                     "key": key,
                     "timestamp": timestamp,
@@ -76,6 +80,7 @@ class MetricTracker(Thread):
                     "mem_util": mem_util,
                     "gpu_rank": gpu_rank,
                     "local_gpu_rank": local_gpu_rank,
+                    "flops": flops,
                     "gpu_info": "none",
                 }
 

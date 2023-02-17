@@ -69,7 +69,10 @@ class BaseProfiler(ABC):
     @abstractmethod
     def show(self):
         pass
-
+    
+    @abstractmethod
+    def reset(self):
+        pass
 
 class ProfilerContext(object):
     """Profiler context manager
@@ -108,6 +111,11 @@ class ProfilerContext(object):
         if self.enable:
             for prof in self.profilers:
                 prof.disable()
+    
+    def reset(self):
+        if self.enable:
+            for prof in self.profilers:
+                prof.reset()
 
     def to_tensorboard(self, writer):
         from torch.utils.tensorboard import SummaryWriter

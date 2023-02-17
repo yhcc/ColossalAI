@@ -8,3 +8,6 @@ click
 fabric
 contexttimer
 ninja
+gputil
+pytz
+elasticsearch

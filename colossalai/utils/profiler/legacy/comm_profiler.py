@@ -378,8 +378,8 @@ class CommProfiler(BaseProfiler):
                         print(self.profiler.function_events, flush=True)
                     self.logger.error("The number of communication primitives != 1.")
             else:
-                torch.cuda.synchronize(get_current_device())
-                total_cuda_time = time.time() - start_time
+                torch.cuda.synchronize()
+                total_cuda_time = (time.time() - start_time)* (1000**2)    # change it to us
                 curr_event.self_count = 1
                 curr_event.self_comm_vol = vol
                 curr_event.self_cuda_time = total_cuda_time
@@ -428,8 +428,8 @@ class CommProfiler(BaseProfiler):
                 self.add_record(prefix + "/c10d::recv", recv_event)
             else:
                 event = CommEvent()
-                torch.cuda.synchronize(get_current_device())
-                total_cuda_time = time.time() - start_time
+                torch.cuda.synchronize()
+                total_cuda_time = (time.time() - start_time)* (1000**2)    # change it to us
                 event.self_count = self.send_op_count + self.recv_op_count
                 event.self_comm_vol = send_vol or recv_vol  # we only count unidirectional bw.
                 event.self_cuda_time = total_cuda_time

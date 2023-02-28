@@ -446,20 +446,9 @@ class LowLevelZeroOptimizer(ColossalaiOptimizer):
 
         # check for overflow
         found_inf = self._check_overflow()
-        loss_scale = float(self.loss_scale.item())  # backup, later it will be used for computing
-        self.grad_scaler.update(found_inf)
-
-        # update loss scale if overflow occurs
-        if found_inf:
-            self._grad_store._averaged_gradients = dict()
-            self.zero_grad()
-            return False, None
-
-        # copy the grad of fp16 param to fp32 param
-        single_grad_partition_groups = []
-        norm_groups = []
-        global_norm = None
+        # 因为 compute norm 的时候可能遇到 inf
         timer('cal_norm').start()
+        norm_groups = []
         for group_id in range(self.num_param_groups):
             # compute norm
             gradients = self._grad_store.get_averaged_gradients_by_group(group_id)
@@ -468,7 +457,26 @@ class LowLevelZeroOptimizer(ColossalaiOptimizer):
                 norm_group = compute_norm(gradients=gradients,
                                         parameters=self._param_store.get_fp16_params_by_rank_group(group_id=group_id,
                                                                                                 rank=self._local_rank))  # before scale norm
+                if norm_group == -1:
+                    timer('cal_norm').stop()
+                    found_inf = True
+                    break
                 norm_groups.append(norm_group)
+
+        loss_scale = float(self.loss_scale.item())  # backup, later it will be used for computing
+        self.grad_scaler.update(found_inf)
+        # update loss scale if overflow occurs
+        if found_inf:
+            self._grad_store._averaged_gradients = dict()
+            self.zero_grad()
+            return False, None
+
+        # copy the grad of fp16 param to fp32 param
+        single_grad_partition_groups = []
+        global_norm = 0
+        for group_id in range(self.num_param_groups):
+            # compute norm
+            gradients = self._grad_store.get_averaged_gradients_by_group(group_id)
 
             # create flat gradient for the flat fp32 params
             fp16_avg_grads = gradients
